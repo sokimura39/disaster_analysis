@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>市町村ごとの災害救助法適用件数</title>
+    <script src="https://unpkg.com/maplibre-gl@4.7.0/dist/maplibre-gl.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+    <link
+      href="https://unpkg.com/maplibre-gl@4.7.0/dist/maplibre-gl.css"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --panel-bg: rgba(17, 24, 39, 0.75);
+        --panel-border: rgba(148, 163, 184, 0.5);
+        --panel-text: #e5e7eb;
+        --panel-muted: #cbd5e1;
+        --accent: #60a5fa;
+      }
+
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow-x: hidden;
+        font-family: "Segoe UI", sans-serif;
+        background: #0f172a;
+        color: #e5e7eb;
+      }
+
+      *, *::before, *::after {
+        box-sizing: border-box;
+      }
+
+      #map {
+        position: absolute;
+        inset: 0;
+      }
+
+      #panel {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 2;
+        width: min(320px, calc(100vw - 32px));
+        height: calc(100vh - 32px);
+        max-height: calc(100vh - 32px);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        background: var(--panel-bg);
+        border: 1px solid var(--panel-border);
+        border-radius: 12px;
+        box-shadow: 0 10px 25px rgba(15, 23, 42, 0.28);
+        padding: 16px 14px 14px;
+        backdrop-filter: blur(6px);
+      }
+
+      .panel-toggle,
+      .sidebar-toggle,
+      #show-right-sidebar {
+        border: 1px solid rgba(148, 163, 184, 0.55);
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 16px;
+        line-height: 1;
+        padding: 5px 8px;
+      }
+
+      .panel-toggle {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        background: rgba(15, 23, 42, 0.35);
+        color: var(--panel-text);
+      }
+
+      .panel-toggle:hover,
+      .sidebar-toggle:hover,
+      #show-right-sidebar:hover {
+        background: var(--accent);
+        color: #0f172a;
+      }
+
+      #panel.is-minimized {
+        top: auto;
+        bottom: 16px;
+        width: min(320px, calc(100vw - 32px));
+        height: auto;
+        max-height: none;
+      }
+
+      #panel.is-minimized h1,
+      #panel.is-minimized #page-explanation,
+      #panel.is-minimized #type-list {
+        display: none;
+      }
+
+      #panel.is-minimized .legend {
+        margin-top: 0;
+      }
+
+      #details-sidebar {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        bottom: 16px;
+        z-index: 2;
+        width: min(360px, calc(100vw - 32px));
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        background: rgba(248, 250, 252, 0.96);
+        color: #0f172a;
+        border: 1px solid rgba(148, 163, 184, 0.7);
+        border-radius: 12px;
+        box-shadow: 0 10px 25px rgba(15, 23, 42, 0.28);
+        padding: 16px;
+        transform: translateX(calc(100% + 32px));
+        visibility: hidden;
+        opacity: 0;
+        pointer-events: none;
+        transition: transform 180ms ease, opacity 180ms ease, visibility 0s linear 180ms;
+      }
+
+      #details-sidebar.is-open {
+        transform: translateX(0);
+        visibility: visible;
+        opacity: 1;
+        pointer-events: auto;
+        transition-delay: 0s;
+      }
+
+      .sidebar-toggle {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        background: #e2e8f0;
+        color: #0f172a;
+      }
+
+      #show-right-sidebar {
+        position: fixed;
+        top: 16px;
+        right: 0;
+        z-index: 2;
+        display: block;
+        background: rgba(248, 250, 252, 0.96);
+        color: #0f172a;
+        border-right: 0;
+        border-radius: 6px 0 0 6px;
+      }
+
+      #show-right-sidebar.is-hidden {
+        display: none;
+      }
+
+      #details-sidebar h2 {
+        margin: 0;
+        font-size: 1.05rem;
+      }
+
+      #details-sidebar p {
+        color: #475569;
+        font-size: 0.82rem;
+        margin: 5px 0 14px;
+        flex: 0 0 auto;
+      }
+
+      #bar-chart {
+        flex: 0 0 160px;
+        height: 160px;
+        margin-bottom: 14px;
+      }
+
+      #bar-chart svg {
+        display: block;
+        height: 100%;
+        width: 100%;
+      }
+
+      .d3-grid line {
+        stroke: #cbd5e1;
+        stroke-opacity: 0.5;
+      }
+
+      .d3-y-axis text {
+        fill: #64748b;
+        font-size: 10px;
+      }
+
+      .d3-bar {
+        fill: #2563eb;
+        stroke: #1d4ed8;
+      }
+
+      .d3-value {
+        fill: #334155;
+        font-size: 10px;
+      }
+
+      .d3-label {
+        fill: #475569;
+        font-size: 12px;
+      }
+
+      #details-list {
+        flex: 1 1 auto;
+        min-height: 240px;
+        height: auto;
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+
+      #details-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .disaster-detail {
+        border-top: 1px solid #cbd5e1;
+        padding-top: 10px;
+      }
+
+      .disaster-detail h3 {
+        font-size: 0.9rem;
+        line-height: 1.35;
+        margin: 0 0 4px;
+      }
+
+      .disaster-detail div {
+        color: #475569;
+        font-size: 0.78rem;
+        line-height: 1.5;
+      }
+
+      .select-all {
+        background: rgba(96, 165, 250, 0.18);
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 1.05rem;
+        line-height: 1.3;
+      }
+
+      #page-explanation {
+        color: var(--panel-muted);
+        font-size: 0.78rem;
+        line-height: 1.55;
+        margin-bottom: 10px;
+        flex: 0 0 auto;
+      }
+
+      #type-list {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      #select-all {
+        grid-column: 1 / -1;
+      }
+
+      .type-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.3);
+        color: var(--panel-text);
+      }
+
+      .type-option:hover {
+        background: rgba(59, 130, 246, 0.12);
+      }
+
+      .type-option input {
+        accent-color: var(--accent);
+        transform: scale(1.05);
+      }
+
+      .legend {
+        flex: 0 0 auto;
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(148, 163, 184, 0.35);
+      }
+
+      .legend-title {
+        font-weight: 600;
+        margin-bottom: 8px;
+        color: var(--panel-text);
+      }
+
+      .legend-scale {
+        height: 12px;
+        border-radius: 6px;
+        background: linear-gradient(to right, #fef3c7, #f59e0b, #f97316, #dc2626, #7f1d1d);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+
+      .legend-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.74rem;
+        color: var(--panel-muted);
+      }
+
+      .maplibregl-popup-content {
+        color: #0f172a;
+        font-size: 0.85rem;
+        line-height: 1.5;
+      }
+
+      .maplibregl-popup-content strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+
+    <div id="panel">
+      <button class="panel-toggle" type="button" aria-label="左側パネルを最小化" title="左側パネルを最小化">−</button>
+      <h1>災害救助法適用件数</h1>
+      <div id="page-explanation">市区町村ごとの平成26年度から令和7年度までの災害救助法適用件数を表示しています。チェックボックスで集計する災害の種類を選択できます。地図上の市区町村をクリックすると、災害の詳細を確認できます。</div>
+      <div id="type-list"></div>
+
+      <div class="legend">
+        <div class="legend-title">災害件数</div>
+        <div class="legend-scale"></div>
+        <div class="legend-labels">
+          <span>0</span>
+          <span>max</span>
+        </div>
+      </div>
+    </div>
+
+    <aside id="details-sidebar" aria-live="polite">
+      <button class="sidebar-toggle" type="button" aria-label="詳細パネルを最小化" title="詳細パネルを最小化">−</button>
+      <h2>市区町村の詳細</h2>
+      <p>市区町村をクリックして災害の詳細を確認してください。</p>
+      <div id="bar-chart" aria-label="災害件数"></div>
+      <div id="details-list"></div>
+    </aside>
+    <button id="show-right-sidebar" type="button" aria-label="詳細パネルを表示" title="詳細パネルを表示">‹</button>
+
+    <script>
+      const DEFAULT_TOTAL_KEY = '合計';
+      const state = {
+        selectedTypes: new Set(),
+        summary: {},
+        database: {},
+        geojson: null,
+        map: null,
+        visibleDisasterTypes: [],
+        selectionInitialized: false,
+        hoveredJcode: null,
+        selectedJcode: null,
+        barChart: null
+      };
+
+      function calculateValueForMunicipality(jcode) {
+        const target = state.summary[jcode];
+        if (!target || !target.disaster_count) return 0;
+
+        const counts = target.disaster_count;
+        if (state.selectedTypes.size === 0) return 0;
+
+        let total = 0;
+        for (const type of state.selectedTypes) {
+          total += Number(counts[type] || 0);
+        }
+        return total;
+      }
+
+      function setupSidebarControls() {
+        const leftPanel = document.getElementById('panel');
+        const leftToggle = leftPanel.querySelector('.panel-toggle');
+        leftToggle.addEventListener('click', () => {
+          const minimized = leftPanel.classList.toggle('is-minimized');
+          leftToggle.textContent = minimized ? '+' : '−';
+          leftToggle.setAttribute('aria-label', minimized ? '左側パネルを表示' : '左側パネルを最小化');
+          leftToggle.title = minimized ? '左側パネルを表示' : '左側パネルを最小化';
+        });
+
+        const rightSidebar = document.getElementById('details-sidebar');
+        const rightToggle = rightSidebar.querySelector('.sidebar-toggle');
+        const showRight = document.getElementById('show-right-sidebar');
+        rightToggle.addEventListener('click', () => {
+          rightSidebar.classList.remove('is-open');
+          showRight.classList.remove('is-hidden');
+        });
+        showRight.addEventListener('click', () => {
+          rightSidebar.classList.add('is-open');
+          showRight.classList.add('is-hidden');
+        });
+      }
+
+      function getDisasterTypes() {
+        const typeSet = new Set();
+        Object.values(state.summary).forEach((entry) => {
+          if (entry && entry.disaster_count) {
+            Object.keys(entry.disaster_count)
+              .filter((key) => key !== DEFAULT_TOTAL_KEY)
+              .forEach((key) => typeSet.add(key));
+          }
+        });
+        return Array.from(typeSet).sort((a, b) => a.localeCompare(b, 'ja'));
+      }
+
+      function updateSelectAllState() {
+        const selectAll = document.querySelector('#select-all input');
+        if (!selectAll) return;
+        selectAll.checked = state.selectedTypes.size === state.visibleDisasterTypes.length;
+        selectAll.indeterminate = state.selectedTypes.size > 0 && !selectAll.checked;
+      }
+
+      function renderTypeControls() {
+        const container = document.getElementById('type-list');
+        const types = getDisasterTypes();
+        state.visibleDisasterTypes = types;
+
+        if (!state.selectionInitialized) {
+          state.selectedTypes = new Set(types);
+          state.selectionInitialized = true;
+        }
+
+        container.innerHTML = '';
+
+        const selectAllLabel = document.createElement('label');
+        selectAllLabel.className = 'type-option select-all';
+        selectAllLabel.id = 'select-all';
+
+        const selectAllCheckbox = document.createElement('input');
+        selectAllCheckbox.type = 'checkbox';
+        selectAllCheckbox.addEventListener('change', () => {
+          state.selectedTypes = selectAllCheckbox.checked ? new Set(types) : new Set();
+          container.querySelectorAll('input[type="checkbox"][data-disaster-type]').forEach((checkbox) => {
+            checkbox.checked = selectAllCheckbox.checked;
+          });
+          updateMapData();
+          updateSelectAllState();
+        });
+
+        const selectAllText = document.createElement('span');
+        selectAllText.textContent = 'すべて選択 / 非選択';
+        selectAllLabel.appendChild(selectAllCheckbox);
+        selectAllLabel.appendChild(selectAllText);
+        container.appendChild(selectAllLabel);
+
+        types.forEach((type) => {
+          const label = document.createElement('label');
+          label.className = 'type-option';
+
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.value = type;
+          checkbox.dataset.disasterType = type;
+          checkbox.checked = state.selectedTypes.has(type);
+          checkbox.addEventListener('change', () => {
+            if (checkbox.checked) {
+              state.selectedTypes.add(type);
+            } else {
+              state.selectedTypes.delete(type);
+            }
+            updateMapData();
+            updateSelectAllState();
+          });
+
+          const text = document.createElement('span');
+          text.textContent = type;
+
+          label.appendChild(checkbox);
+          label.appendChild(text);
+          container.appendChild(label);
+        });
+
+        updateSelectAllState();
+      }
+
+      function buildColorStops(values) {
+        const maxValue = Math.max(...values, 1);
+        const colors = ['#ffffff', '#fef3c7', '#fde68a', '#fbbf24', '#f59e0b', '#f97316', '#dc2626'];
+        const distinctValues = [...new Set(values)].sort((a, b) => a - b);
+        let colorStops = distinctValues.map((value, index) => [
+          value,
+          colors[Math.min(index, colors.length - 1)]
+        ]);
+        if (colorStops.length === 1) {
+          const onlyValue = colorStops[0][0];
+          colorStops = onlyValue === 0
+            ? [[0, colors[0]], [1, colors[0]]]
+            : [[0, colors[0]], colorStops[0]];
+        }
+
+        const expr = ['interpolate', ['linear'], ['get', 'disasterCount']];
+        colorStops.forEach(([value, color]) => {
+          expr.push(value, color);
+        });
+
+        return { expr, maxValue };
+      }
+
+      function updateMapData() {
+        if (!state.geojson || !state.map) return;
+
+        const values = [];
+        state.geojson.features.forEach((feature) => {
+          const jcode = feature.properties && feature.properties.JCODE;
+          const value = calculateValueForMunicipality(jcode);
+          feature.properties.disasterCount = value;
+          values.push(value);
+        });
+
+        const { expr, maxValue } = buildColorStops(values);
+        state.map.getSource('municipality-source').setData(state.geojson);
+        state.map.setPaintProperty('municipality-fill', 'fill-color', expr);
+
+        const legendMax = document.querySelector('.legend-labels span:last-child');
+        if (legendMax) {
+          legendMax.textContent = maxValue.toString();
+        }
+      }
+
+      function buildInitialLayerPaint() {
+        const values = state.geojson.features.map((feature) => {
+          const jcode = feature.properties && feature.properties.JCODE;
+          return calculateValueForMunicipality(jcode);
+        });
+        return { 'fill-color': buildColorStops(values).expr, 'fill-opacity': 1, 'fill-outline-color': '#ffffff' };
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#039;');
+      }
+
+      function showMunicipalityDetails(jcode, municipalityName) {
+        const sidebar = document.getElementById('details-sidebar');
+        document.getElementById('show-right-sidebar').classList.add('is-hidden');
+        const list = document.getElementById('details-list');
+        const summary = state.summary[jcode];
+        const disasterIds = summary?.disaster_id || [];
+        const records = disasterIds
+          .map((id) => state.database[String(id)])
+          .filter(Boolean);
+
+        state.selectedJcode = jcode;
+        const chartValues = state.visibleDisasterTypes.map((type) => Number(summary?.disaster_count?.[type] || 0));
+        const chartMax = Math.max(...chartValues, 1);
+        const chartElement = document.getElementById('bar-chart');
+        chartElement.innerHTML = '';
+        const chartWidth = chartElement.clientWidth;
+        const chartHeight = chartElement.clientHeight;
+        const margin = { top: 14, right: 8, bottom: 80, left: 28 };
+        const plotWidth = chartWidth - margin.left - margin.right;
+        const plotHeight = chartHeight - margin.top - margin.bottom;
+        const svg = d3.select(chartElement).append('svg')
+          .attr('viewBox', `0 0 ${chartWidth} ${chartHeight}`)
+          .attr('role', 'img')
+          .attr('aria-label', 'Disaster count by type');
+        const x = d3.scaleBand()
+          .domain(state.visibleDisasterTypes)
+          .range([margin.left, margin.left + plotWidth])
+          .padding(0.3);
+        const y = d3.scaleLinear()
+          .domain([0, chartMax])
+          .range([margin.top + plotHeight, margin.top]);
+        const plot = svg.append('g');
+        plot.append('g')
+          .attr('class', 'd3-grid')
+          .attr('transform', `translate(${margin.left}, 0)`)
+          .call(d3.axisLeft(y).ticks(chartMax).tickSize(-plotWidth).tickFormat(''))
+          .call((grid) => grid.selectAll('.tick line').attr('stroke', '#cbd5e1').attr('stroke-opacity', 0.5))
+          .call((grid) => grid.select('.domain').remove());
+        plot.append('g')
+          .attr('class', 'd3-y-axis')
+          .attr('transform', `translate(${margin.left}, 0)`)
+          .call(d3.axisLeft(y).ticks(chartMax).tickFormat(d3.format('d')))
+          .call((axis) => axis.select('.domain').remove());
+        plot.selectAll('.d3-bar')
+          .data(state.visibleDisasterTypes.map((type, index) => ({ type, value: chartValues[index] })))
+          .join('rect')
+          .attr('class', 'd3-bar')
+          .attr('x', (item) => x(item.type))
+          .attr('y', (item) => y(item.value))
+          .attr('width', x.bandwidth())
+          .attr('height', (item) => y(0) - y(item.value));
+        plot.selectAll('.d3-value')
+          .data(state.visibleDisasterTypes.map((type, index) => ({ type, value: chartValues[index] })))
+          .join('text')
+          .attr('class', 'd3-value')
+          .attr('text-anchor', 'middle')
+          .attr('x', (item) => x(item.type) + x.bandwidth() / 2)
+          .attr('y', (item) => y(item.value) - 4)
+          .text((item) => item.value);
+        const labelGroup = plot.append('g').attr('class', 'd3-labels');
+        state.visibleDisasterTypes.forEach((type) => {
+          const label = labelGroup.append('text')
+            .attr('class', 'd3-label')
+            .attr('text-anchor', 'middle')
+            .attr('x', x(type) + x.bandwidth() / 2)
+            .attr('y', margin.top + plotHeight + 18);
+          Array.from(type).forEach((character, index) => {
+            label.append('tspan')
+              .attr('x', x(type) + x.bandwidth() / 2)
+              .attr('dy', index === 0 ? 0 : '1em')
+              .text(character);
+          });
+        });
+
+        sidebar.querySelector('h2').textContent = municipalityName;
+        sidebar.querySelector('p').textContent = `災害救助法適用事例 ${records.length}件`;
+        list.innerHTML = records.length
+          ? records.map((record) => `
+              <article class="disaster-detail">
+                <h3>${escapeHtml(record['災害タイトル'] || 'Untitled disaster')}</h3>
+                <div>種別: ${escapeHtml(record['災害種別'])}</div>
+                <div>適用日: ${escapeHtml(record['適用日'])}</div>
+                <!--<div>年度: ${escapeHtml(record['西暦年度'])}</div>-->
+              </article>
+            `).join('')
+          : '<p>災害救助法適用実績なし</p>';
+        sidebar.classList.add('is-open');
+      }
+
+      async function init() {
+        setupSidebarControls();
+        const mapContainer = document.getElementById('map');
+        state.map = new maplibregl.Map({
+          container: mapContainer,
+          style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+          center: [138.5, 36.5],
+          zoom: 4.2,
+          minZoom: 3,
+          maxZoom: 12
+        });
+
+        window.appMap = state.map;
+        window.disasterState = state;
+
+        state.map.addControl(new maplibregl.NavigationControl(), 'top-right');
+        state.map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+
+        state.map.on('load', async () => {
+          try {
+            const [summaryResponse, geoResponse] = await Promise.all([
+              fetch('disaster_data/disaster_summary.json'),
+              fetch('disaster_data/japan_map.geojson')
+            ]);
+
+            state.summary = await summaryResponse.json();
+            state.geojson = await geoResponse.json();
+            state.database = await (await fetch('disaster_data/disaster_database.json')).json();
+
+            renderTypeControls();
+
+            state.geojson.features.forEach((feature) => {
+              const properties = feature.properties || {};
+              properties.disasterCount = calculateValueForMunicipality(properties.JCODE);
+            });
+
+            state.map.addSource('municipality-source', {
+              type: 'geojson',
+              data: state.geojson,
+              promoteId: 'JCODE'
+            });
+
+            const initialPaint = buildInitialLayerPaint();
+
+            state.map.addLayer({
+              id: 'municipality-fill',
+              type: 'fill',
+              source: 'municipality-source',
+              paint: initialPaint
+            });
+
+            state.map.addLayer({
+              id: 'municipality-hover',
+              type: 'line',
+              source: 'municipality-source',
+              paint: {
+                'line-color': [
+                  'case',
+                  ['boolean', ['feature-state', 'selected'], false], '#2563eb',
+                  ['boolean', ['feature-state', 'hover'], false], '#ffffff',
+                  'rgba(255, 255, 255, 0.15)'
+                ],
+                'line-width': [
+                  'case',
+                  ['boolean', ['feature-state', 'selected'], false], 4,
+                  ['boolean', ['feature-state', 'hover'], false], 3,
+                  0.7
+                ],
+                'line-opacity': [
+                  'case',
+                  ['boolean', ['feature-state', 'selected'], false], 1,
+                  ['boolean', ['feature-state', 'hover'], false], 1,
+                  0.45
+                ],
+                'line-blur': [
+                  'case',
+                  ['boolean', ['feature-state', 'selected'], false], 2,
+                  ['boolean', ['feature-state', 'hover'], false], 1.5,
+                  0
+                ]
+              }
+            });
+
+            const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
+
+            state.map.on('mousemove', 'municipality-fill', (event) => {
+              const feature = event.features[0];
+              if (!feature) return;
+
+              const jcode = feature.properties.JCODE;
+              const municipalityName = feature.properties.prefcity || feature.properties.SIKUCHOSON || 'Municipality';
+              if (state.hoveredJcode !== jcode) {
+                if (state.hoveredJcode) {
+                  state.map.setFeatureState({ source: 'municipality-source', id: state.hoveredJcode }, { hover: false });
+                }
+                state.hoveredJcode = jcode;
+                state.map.setFeatureState({ source: 'municipality-source', id: jcode }, { hover: true });
+              }
+              const value = calculateValueForMunicipality(jcode);
+              popup.setLngLat(event.lngLat).setHTML(`
+                <strong>${escapeHtml(municipalityName)}</strong>
+                <!--JCODE: ${escapeHtml(jcode)}<br>--->
+                件数: ${value}
+              `).addTo(state.map);
+            });
+
+            state.map.on('click', 'municipality-fill', (event) => {
+              const feature = event.features[0];
+              if (!feature) return;
+
+              const jcode = feature.properties.JCODE;
+              const municipalityName = feature.properties.prefcity || feature.properties.SIKUCHOSON || 'Municipality';
+              if (state.selectedJcode) {
+                state.map.setFeatureState({ source: 'municipality-source', id: state.selectedJcode }, { selected: false });
+              }
+              state.map.setFeatureState({ source: 'municipality-source', id: jcode }, { selected: true });
+              showMunicipalityDetails(jcode, municipalityName);
+            });
+
+            state.map.on('mouseenter', 'municipality-fill', () => {
+              state.map.getCanvas().style.cursor = 'pointer';
+            });
+
+            state.map.on('mouseleave', 'municipality-fill', () => {
+              if (state.hoveredJcode) {
+                state.map.setFeatureState({ source: 'municipality-source', id: state.hoveredJcode }, { hover: false });
+                state.hoveredJcode = null;
+              }
+              state.map.getCanvas().style.cursor = '';
+              popup.remove();
+            });
+
+            updateMapData();
+          } catch (error) {
+            console.error('データ読み込みエラー:', error);
+            alert('災害マップデータの読み込みに失敗しました。');
+          }
+        });
+      }
+
+      init();
+    </script>
+  </body>
+</html>
